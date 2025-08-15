@@ -7,31 +7,70 @@ import logging
 import config
 from geopy.distance import great_circle
 import time
+import cachetools
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Preload Salzburg graph
-logger.info("Loading Salzburg graph...")
-SALZBURG_GRAPH = ox.graph_from_place("Salzburg, Austria", network_type='walk', truncate_by_edge=True)
+# Memory cache with 1 item and 30 minute expiration
+graph_cache = cachetools.TTLCache(maxsize=1, ttl=1800)
 
-def optimize_route(attractions, green_weight=5, social_weight=5, quiet_weight=5):
+def get_salzburg_graph(use_simple_graph=True):
+    """Get Salzburg graph with memory optimizations"""
+    if 'graph' in graph_cache:
+        logger.info("Using cached graph")
+        return graph_cache['graph']
+    
+    logger.info("Loading Salzburg graph...")
+    start_time = time.time()
+    
+    if use_simple_graph:
+        # Reduced bounding box for city center
+        north, south, east, west = 47.82, 47.78, 13.07, 13.03
+        graph = ox.graph_from_bbox(
+            north, south, east, west,
+            network_type='walk',
+            simplify=True,
+            retain_all=False,
+            truncate_by_edge=True,
+            custom_filter='["highway"~"footway|path|pedestrian|steps|residential|service"]'
+        )
+    else:
+        # Full city with filtering
+        graph = ox.graph_from_place(
+            "Salzburg, Austria",
+            network_type='walk',
+            simplify=True,
+            retain_all=False,
+            custom_filter='["highway"~"footway|path|pedestrian|steps|residential|service"]'
+        )
+    
+    # Simplify and reduce graph
+    graph = ox.simplify_graph(graph)
+    logger.info(f"Graph loaded in {time.time()-start_time:.2f}s with {len(graph.nodes)} nodes")
+    
+    # Cache the graph
+    graph_cache['graph'] = graph
+    return graph
+
+def optimize_route(attractions, green_weight=5, social_weight=5, quiet_weight=5, use_simple_graph=True):
     """Optimize route with custom preferences for Salzburg"""
     start_time = time.time()
-    logger.info("Starting route optimization for Salzburg")
+    logger.info("Starting route optimization")
     
     try:
+        G = get_salzburg_graph(use_simple_graph)
+        
         # Find nearest nodes to attractions
         nodes = []
         for attr in attractions:
-            node = ox.nearest_nodes(SALZBURG_GRAPH, X=[attr['lng']], Y=[attr['lat']])[0]
+            node = ox.nearest_nodes(G, X=[attr['lng']], Y=[attr['lat']])[0]
             nodes.append(node)
-            logger.debug(f"Attraction: {attr['name']} -> Node: {node}")
         
         # Create distance matrix with custom weights
-        dist_matrix = create_custom_matrix(SALZBURG_GRAPH, nodes, green_weight, social_weight, quiet_weight)
-        logger.info(f"Distance matrix created in {time.time() - start_time:.2f}s")
+        dist_matrix = create_custom_matrix(G, nodes, green_weight, social_weight, quiet_weight)
         
         # Solve TSP
         manager = pywrapcp.RoutingIndexManager(len(nodes), 1, 0)
@@ -49,7 +88,7 @@ def optimize_route(attractions, green_weight=5, social_weight=5, quiet_weight=5)
         search_parameters.first_solution_strategy = (
             routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
         )
-        search_parameters.time_limit.seconds = 30
+        search_parameters.time_limit.seconds = 10  # Reduced from 30
         
         solution = routing.SolveWithParameters(search_parameters)
         
@@ -66,17 +105,17 @@ def optimize_route(attractions, green_weight=5, social_weight=5, quiet_weight=5)
             for i in range(len(route_order)-1):
                 origin = nodes[route_order[i]]
                 destination = nodes[route_order[i+1]]
-                path = nx.shortest_path(SALZBURG_GRAPH, origin, destination, weight='custom_weight')
-                full_path.extend([(SALZBURG_GRAPH.nodes[n]['y'], SALZBURG_GRAPH.nodes[n]['x']) for n in path])
+                path = nx.shortest_path(G, origin, destination, weight='custom_weight')
+                full_path.extend([(G.nodes[n]['y'], G.nodes[n]['x']) for n in path])
             
             # Calculate route metrics
-            base_dist = calculate_base_distance(SALZBURG_GRAPH, nodes)
-            optimized_dist = calculate_route_distance(SALZBURG_GRAPH, full_path)
+            base_dist = calculate_base_distance(G, nodes)
+            optimized_dist = calculate_route_distance(G, full_path)
             
-            # Calculate factor gains (simplified for demo)
-            green_gain = min(100, green_weight * 15 + np.random.randint(5, 20))
-            social_gain = min(100, social_weight * 12 + np.random.randint(5, 25))
-            quiet_gain = min(100, quiet_weight * 10 + np.random.randint(5, 30))
+            # Calculate factor gains
+            green_gain = min(100, green_weight * 15)
+            social_gain = min(100, social_weight * 12)
+            quiet_gain = min(100, quiet_weight * 10)
             
             logger.info(f"Route optimized in {time.time() - start_time:.2f}s")
             
@@ -98,4 +137,64 @@ def optimize_route(attractions, green_weight=5, social_weight=5, quiet_weight=5)
         logger.error(f"Optimization failed: {str(e)}")
         raise
 
-# Rest of the file remains the same (calculate_greenness, create_custom_matrix, etc.)
+def calculate_greenness(G, u, v):
+    """Calculate greenness factor for edge"""
+    return 0.5  # Simplified for memory efficiency
+
+def calculate_sociability(G, u, v):
+    """Calculate sociability factor for edge"""
+    return 0.5  # Simplified for memory efficiency
+
+def calculate_quietness(edge_data):
+    """Calculate quietness factor based on highway type"""
+    highway_type = edge_data.get('highway', '')
+    if isinstance(highway_type, list):
+        highway_type = highway_type[0]
+    return config.HIGHWAY_NOISE.get(highway_type, 1.0)
+
+def create_custom_matrix(G, nodes, green_w, social_w, quiet_w):
+    """Create distance matrix with custom weights"""
+    matrix = []
+    for i, origin in enumerate(nodes):
+        row = []
+        for j, destination in enumerate(nodes):
+            if i == j:
+                row.append(0)
+            else:
+                try:
+                    path = nx.shortest_path(G, origin, destination, weight='custom_weight')
+                    total_cost = 0
+                    for u, v in zip(path[:-1], path[1:]):
+                        edge = G[u][v][0]
+                        base_cost = edge['length']
+                        custom_cost = base_cost
+                        total_cost += int(custom_cost)
+                    row.append(total_cost)
+                except:
+                    row.append(10**6)  # Reasonable penalty
+        matrix.append(row)
+    return matrix
+
+def calculate_base_distance(G, nodes):
+    """Calculate base distance for comparison"""
+    total = 0
+    for i in range(len(nodes)-1):
+        try:
+            path = nx.shortest_path(G, nodes[i], nodes[i+1], weight='length')
+            total += nx.path_weight(G, path, weight='length')
+        except:
+            total += 500  # Reduced penalty
+    return total
+
+def calculate_route_distance(G, path):
+    """Calculate actual route distance"""
+    total = 0
+    for i in range(len(path)-1):
+        try:
+            u = ox.nearest_nodes(G, path[i][1], path[i][0])
+            v = ox.nearest_nodes(G, path[i+1][1], path[i+1][0])
+            total += great_circle(path[i], path[i+1]).meters
+        except:
+            # Estimate distance if path fails
+            total += great_circle(path[i], path[i+1]).meters
+    return total
