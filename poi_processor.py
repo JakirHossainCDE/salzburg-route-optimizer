@@ -8,25 +8,32 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def get_pois_near_route(route, radius=config.POI_SEARCH_RADIUS):
-    """Get POIs near the optimized route for any city"""
+    """Get POIs near the optimized route"""
     try:
         if len(route) < 2:
             return []
             
         logger.info(f"Finding POIs near route with {len(route)} points")
         
-        # Create route buffer (simplified convex hull)
+        # Create route buffer
         lats = [p[0] for p in route]
         lngs = [p[1] for p in route]
         bbox = (min(lats), min(lngs), max(lats), max(lngs))
         
-        # Get POIs within bounding box
+        # Get POIs within bounding box (simplified tags)
+        tags = {
+            'amenity': ['cafe', 'restaurant', 'bar', 'pub'],
+            'tourism': ['attraction', 'museum'],
+            'shop': ['bakery', 'gift']
+        }
+        
         pois = ox.geometries_from_bbox(
             north=bbox[2], 
             south=bbox[0], 
             east=bbox[3], 
             west=bbox[1], 
-            tags=config.SOCIAL_TAGS
+            tags=tags,
+            custom_filter='["name"]'  # Only get named POIs
         )
         
         # Filter POIs near route
@@ -48,12 +55,11 @@ def get_pois_near_route(route, radius=config.POI_SEARCH_RADIUS):
                         'distance': min_dist
                     })
             except Exception as e:
-                logger.warning(f"Skipping POI: {str(e)}")
+                continue  # Skip problematic POIs
         
         # Sort by distance and limit results
         results.sort(key=lambda x: x['distance'])
-        logger.info(f"Found {len(results)} POIs near route")
-        return results[:20]  # Return top 20 POIs
+        return results[:10]  # Return top 10 POIs
         
     except Exception as e:
         logger.error(f"POI processing failed: {str(e)}")
@@ -62,11 +68,7 @@ def get_pois_near_route(route, radius=config.POI_SEARCH_RADIUS):
 def get_poi_type(osm_row):
     """Categorize POI based on OSM tags"""
     if 'amenity' in osm_row:
-        if osm_row['amenity'] in ['cafe', 'restaurant', 'food_court', 'ice_cream']:
-            return 'food'
-        return osm_row['amenity']
-    if 'leisure' in osm_row:
-        return 'leisure'
+        return 'food'
     if 'tourism' in osm_row:
         return 'attraction'
     if 'shop' in osm_row:
