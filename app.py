@@ -63,3 +63,25 @@ def health_check():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
+
+
+
+
+import os
+from flask import Flask, render_template_string, request, jsonify
+# ... other imports ...
+
+app = Flask(__name__)
+
+# Add health check endpoint
+@app.route('/healthz')
+def health_check():
+    return 'OK', 200
+
+# ... rest of your code ...
+
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
+
