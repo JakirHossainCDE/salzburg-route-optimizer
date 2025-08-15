@@ -33,12 +33,9 @@ document.addEventListener('DOMContentLoaded', () => {
 // Load Salzburg data
 function loadSalzburg() {
     showLoading("Loading Salzburg data...");
-    
-    // Clear previous state
     selectedAttractions = [];
     clearMap();
     
-    // Load attractions and set map view
     setTimeout(() => {
         populateAttractionsList();
         hideLoading();
@@ -49,16 +46,13 @@ function loadSalzburg() {
 function populateAttractionsList() {
     attractionsList.innerHTML = '';
     
-    // Salzburg attractions with coordinates
+    // Salzburg attractions with coordinates (city center only)
     const attractions = [
         {id: 1, name: 'Salzburg Cathedral', icon: 'place-of-worship', lat: 47.7981, lng: 13.0466},
         {id: 2, name: 'Hohensalzburg Fortress', icon: 'landmark', lat: 47.7942, lng: 13.0503},
         {id: 3, name: 'Mirabell Palace', icon: 'landmark', lat: 47.8058, lng: 13.0436},
         {id: 4, name: 'Mozarts Geburtshaus', icon: 'music', lat: 47.8000, lng: 13.0436},
-        {id: 5, name: 'Getreidegasse', icon: 'shopping-bag', lat: 47.7995, lng: 13.0401},
-        {id: 6, name: 'Hellbrunn Palace', icon: 'landmark', lat: 47.7622, lng: 13.0606},
-        {id: 7, name: 'Mönchsberg', icon: 'mountain', lat: 47.7953, lng: 13.0414},
-        {id: 8, name: 'Salzach River Cruise', icon: 'ship', lat: 47.8030, lng: 13.0410}
+        {id: 5, name: 'Getreidegasse', icon: 'shopping-bag', lat: 47.7995, lng: 13.0401}
     ];
     
     attractions.forEach(attr => {
@@ -104,7 +98,6 @@ optimizeBtn.addEventListener('click', () => {
         .map(item => {
             const id = parseInt(item.dataset.id);
             const name = item.querySelector('span').textContent;
-            // Find coordinates in the predefined list
             const attraction = attractions.find(a => a.id === id);
             return {
                 id,
@@ -147,4 +140,165 @@ optimizeBtn.addEventListener('click', () => {
     });
 });
 
-// Rest of the file remains the same (displayRoute, displayPOIs, etc.)
+// Display route on map
+function displayRoute(routeData) {
+    // Clear existing route
+    if (map.getSource('route')) {
+        map.removeLayer('route');
+        map.removeSource('route');
+    }
+    
+    // Add new route
+    map.addSource('route', {
+        type: 'geojson',
+        data: {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+                type: 'LineString',
+                coordinates: routeData.path
+            }
+        }
+    });
+    
+    map.addLayer({
+        id: 'route',
+        type: 'line',
+        source: 'route',
+        layout: {
+            'line-join': 'round',
+            'line-cap': 'round'
+        },
+        paint: {
+            'line-color': '#007BFF',
+            'line-width': 5,
+            'line-opacity': 0.7
+        }
+    });
+    
+    // Update distance display
+    document.getElementById('route-distance').textContent = 
+        `${(routeData.distance / 1000).toFixed(1)} km`;
+    
+    // Fit map to route bounds
+    const bounds = routeData.path.reduce((bounds, coord) => {
+        return bounds.extend(coord);
+    }, new mapboxgl.LngLatBounds());
+    
+    map.fitBounds(bounds, {
+        padding: 50,
+        maxZoom: 15
+    });
+}
+
+// Display POIs on map
+function displayPOIs(pois) {
+    // Clear existing POIs
+    if (map.getSource('pois')) {
+        map.removeLayer('pois');
+        map.removeSource('pois');
+    }
+    
+    // Add new POIs
+    map.addSource('pois', {
+        type: 'geojson',
+        data: {
+            type: 'FeatureCollection',
+            features: pois.map(poi => ({
+                type: 'Feature',
+                geometry: {
+                    type: 'Point',
+                    coordinates: [poi.lng, poi.lat]
+                },
+                properties: {
+                    name: poi.name,
+                    type: poi.type
+                }
+            }))
+        }
+    });
+    
+    map.addLayer({
+        id: 'pois',
+        type: 'circle',
+        source: 'pois',
+        paint: {
+            'circle-radius': 8,
+            'circle-color': [
+                'match',
+                ['get', 'type'],
+                'food', '#FF5722',
+                'attraction', '#2196F3',
+                'shop', '#9C27B0',
+                '#607D8B'
+            ],
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff'
+        }
+    });
+    
+    // Add interactivity
+    map.on('click', 'pois', (e) => {
+        const name = e.features[0].properties.name;
+        const type = e.features[0].properties.type;
+        
+        new mapboxgl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(`<b>${name}</b><br>Type: ${type}`)
+            .addTo(map);
+    });
+}
+
+// Display comparison metrics
+function displayComparison(comparison) {
+    document.getElementById('extra-distance').textContent = comparison.distance_diff;
+    document.getElementById('greenness-gain').textContent = comparison.green_gain;
+    document.getElementById('social-gain').textContent = comparison.social_gain;
+    document.getElementById('quiet-gain').textContent = comparison.quiet_gain;
+}
+
+// Utility functions
+function showLoading(message) {
+    loadingText.textContent = message;
+    loadingOverlay.style.display = 'flex';
+}
+
+function hideLoading() {
+    loadingOverlay.style.display = 'none';
+}
+
+function showMessage(message, type = 'info') {
+    messageBox.textContent = message;
+    messageBox.className = type;
+    messageBox.classList.remove('hidden');
+    
+    setTimeout(() => {
+        messageBox.classList.add('hidden');
+    }, 5000);
+}
+
+function clearMap() {
+    // Clear routes
+    if (map.getSource('route')) {
+        map.removeLayer('route');
+        map.removeSource('route');
+    }
+    
+    // Clear POIs
+    if (map.getSource('pois')) {
+        map.removeLayer('pois');
+        map.removeSource('pois');
+    }
+    
+    // Reset info display
+    document.getElementById('route-distance').textContent = '-';
+    document.getElementById('extra-distance').textContent = '-';
+    document.getElementById('greenness-gain').textContent = '-';
+    document.getElementById('social-gain').textContent = '-';
+    document.getElementById('quiet-gain').textContent = '-';
+}
+
+// Initialize
+map.on('load', () => {
+    loadSalzburg();
+});
